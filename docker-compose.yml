@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: docx_converter
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d docx_converter"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/docx_converter
+      - REDIS_URL=redis://redis:6379/0
+      - FILE_STORAGE_PATH=/app/storage
+    volumes:
+      - ./app:/app/app
+      - ./main.py:/app/main.py
+      - shared_storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: .
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/docx_converter
+      - REDIS_URL=redis://redis:6379/0
+      - FILE_STORAGE_PATH=/app/storage
+    volumes:
+      - ./app:/app/app
+      - ./main.py:/app/main.py
+      - shared_storage:/app/storage
+      # Mount home directory or tmp to allow LibreOffice to write temp files if needed
+      - /tmp:/tmp 
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  shared_storage:
